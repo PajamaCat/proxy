@@ -78,41 +78,6 @@ ssize_t Rio_writen_w(int fd, void *userbuf, size_t n){
 	return ret;
 }
 
-//   int open_clientfd_ts(char *hostname, int port)
-// {
-//     int clientfd, error;
-//     struct addrinfo *ai;
-//     struct sockaddr_in serveraddr;
-
-//     if ((clientfd = socket(AF_INET, SOCK_STREAM, 0)) < 0)
-//         return -1; /* check errno for cause of error */
-
-
-//     error = getaddrinfo(hostname, NULL, NULL, &ai);
-
-//     if (error != 0) {
-//         /* check gai_strerr for cause of error */
-//         fprintf(stderr, "ERROR: %s", gai_strerror(error));
-//         freeaddrinfo(ai);
-//         return -1;
-//     }
-
-//     /* Fill in the server's IP address and port */
-//     bzero((char *) &serveraddr, sizeof(serveraddr));
-//     serveraddr.sin_family = AF_INET;
-//     bcopy(ai->ai_addr,
-//       (struct sockaddr *)&serveraddr, ai->ai_addrlen);
-//     serveraddr.sin_port = htons(port);
-
-//     /* Establish a connection with the server */
-//     if (connect(clientfd, (SA *) &serveraddr, sizeof(serveraddr)) < 0)
-//         return -1;
-
-//     freeaddrinfo(ai);
-//     return clientfd;
-// }
-
-
 
 int open_clientfd_ts(char *hostname, int port)
 {
@@ -199,117 +164,19 @@ void clienterror(int fd, char *cause, char *errnum,
 }
 
 
-int
-process_chunked(rio_t proxy_client_rio, int connfd)
-{
-
-	int chunk_size = 0;
-	ssize_t rio_read_flag = 0;
-	int size_read = 0;
-	char buffer[MAXLINE];
-
-
-	while ((rio_read_flag = Rio_readlineb_w(&proxy_client_rio, buffer, MAXLINE)) != 0) {
-//		printf("a new start lalalal\n");
-			if(rio_read_flag < 0){
-				return -1; // kill thread
-			}
-
-			size_read += strlen(buffer);
-			sscanf(buffer, "%x", &chunk_size);
-//			printf("chunksize is %d\n", chunk_size);
-//			printf("what we originally read is %s\n", buffer);
-			Rio_writen_w(connfd, buffer, rio_read_flag);
-			if (chunk_size == 0)
-				break;
-
-			/* If the chunk size is larger than MAXLINE */
-			while (chunk_size > MAXLINE) {
-				if((rio_read_flag = Rio_readnb_w(&proxy_client_rio, buffer, MAXLINE)) < 0){
-					return -1; // kill thread
-				}
-				chunk_size -= MAXLINE;
-				size_read += strlen(buffer);
-//				printf("In chunk, read from server is: %s, its size is %lu, rio_read_flag is %lu\n", buffer, strlen(buffer), rio_read_flag);
-//				printf("Now chunk size is %d\n", chunk_size);
-				Rio_writen_w(connfd, buffer, rio_read_flag);
-			}
-
-			/* Read the last chunk */
-			if((rio_read_flag = Rio_readnb_w(&proxy_client_rio, buffer, chunk_size)) < 0){
-				return -1; // kill thread
-			}
-
-			size_read += strlen(buffer);
-			Rio_writen_w(connfd, buffer, rio_read_flag);
-//			printf("In chunk, read from server 2 is: %s, its size is %lu\n", buffer, strlen(buffer));
-
-			/* Read the new line after the last chunk */
-			if((rio_read_flag = Rio_readlineb_w(&proxy_client_rio, buffer, MAXLINE)) < 0){
-				return -1; // kill thread
-			}
-
-			size_read += strlen(buffer);
-			Rio_writen_w(connfd, buffer, rio_read_flag);
-//			printf("In chunk, read from server is, the new line: %s\n", buffer);
-
-		}
-
-	return size_read;
-}
-
-int
-process_unchunked(rio_t proxy_client_rio, int connfd, int content_size)
-{
-	//int size_to_read = content_size;
-	int size_read = content_size;
-	ssize_t rio_read_flag = 0;
-	char buffer[MAXLINE];
-
-
-	while (size_read < content_size) {
-		rio_read_flag = Rio_readnb_w(&proxy_client_rio, buffer, (content_size - size_read) < MAXLINE ? (content_size - size_read) : MAXLINE);
-		if(rio_read_flag < 0){
-			return -1; // kill thread
-		} else if (rio_read_flag == 0){
-			break;
-		}
-		//printf("content_size is %d\n", content_size);
-		printf("Response content from server is %s\n", buffer);
-		size_read += rio_read_flag;
-		//size_read += strlen(buffer);
-		//size_to_read -= strlen(buffer);
-		printf("what is size read: %d\n", size_read);
-		//						strcat(read_content, buffer);
-		//						printf("Response Content write to client is:\n%s", read_content);
-		Rio_writen_w(connfd, buffer, rio_read_flag);
-	}
-
-	return size_read;
-
-}
-
-
-
 void doit(struct bundle *my_helper)
 {
-	/******************************* be sequential for a while ******************/
 	Pthread_detach(pthread_self()); // mark myself as detach
-	/******************************* be sequential for a while ******************/
-	printf("Receiving request %d\n", my_helper->count);
+
 	/* Local variables */
 	int connfd = my_helper->fd;
-	//char *malloc_target_addr;
-
-
-
 	char *request_to_send = Malloc(sizeof(char) * MAXLINE);
 	bzero(request_to_send, sizeof(char) * MAXLINE);
-	//printf("request_to_send init %s\n", request_to_send);
-	//char request_to_send[MAXLINE];
 	char request_uri[MAXLINE];
 	bzero(request_uri, MAXLINE);
+
 	/* parse uri, then we have the following three */
+
 	char request_method[MAXLINE];
 	bzero(request_method, MAXLINE);
 	char request_version[MAXLINE];
@@ -319,8 +186,6 @@ void doit(struct bundle *my_helper)
 	/* log_string to write each time */
 	char log_string[MAXLINE];
 	bzero(log_string, MAXLINE);
-
-	//char *buffer = Malloc(sizeof(char) * MAXLINE);
 	char buffer[MAXLINE];
 	bzero(buffer, MAXLINE);
 	char target_addr[MAXLINE];
@@ -335,7 +200,7 @@ void doit(struct bundle *my_helper)
 	rio_t proxy_client_rio;
 	int http_version_flag = 0;
 
-	int is_chunked = 0;
+//	int is_chunked = 0;
 
 	/* Rio read init per descriptor */
 	rio_t rio;
@@ -343,8 +208,6 @@ void doit(struct bundle *my_helper)
 
 	if (Rio_readlineb_w(&rio, buffer, MAXLINE) < 0){
 		Close(connfd); // ALWAYS REMEMBER TO CLOSE CONNECTION BEFORE RETURN
-		//Free(&(my_helper->fd));
-//		Free((my_helper->clientaddr));
 		Free(my_helper);
 		Free(request_to_send);
 		return;
@@ -355,8 +218,6 @@ void doit(struct bundle *my_helper)
 		// error occured in sscanf
 		printf("ERROR: request line formatting error.\n");
 		Close(connfd); // ALWAYS REMEMBER TO CLOSE CONNECTION BEFORE RETURN
-		//Free(&(my_helper->fd));
-//		Free((my_helper->clientaddr));
 		Free(my_helper);
 		Free(request_to_send);
 		return;
@@ -365,14 +226,10 @@ void doit(struct bundle *my_helper)
 	/* if not GET, just return */
 	if(strcmp(request_method, "GET") != 0){
 		fprintf(stderr, "ERROR: Proxy cannot handle %s\n", request_method);
-
        	clienterror(connfd, request_method, "501", "Not Implemented", "Proxy does not implement this method");
-
 		Close(connfd); // ALWAYS REMEMBER TO CLOSE CONNECTION BEFORE RETURN
-		//Free(&(my_helper->fd));
-//        Free((my_helper->clientaddr));
-    Free(my_helper);
-    Free(request_to_send);
+		Free(my_helper);
+		Free(request_to_send);
 		return;
 	}
 
@@ -390,56 +247,37 @@ void doit(struct bundle *my_helper)
 		// error occured in sscanf
 		printf("ERROR: request line formatting error.\n");
 		Close(connfd); // ALWAYS REMEMBER TO CLOSE CONNECTION BEFORE RETURN
-		//Free(&(my_helper->fd));
-//        Free((my_helper->clientaddr));
-    Free(my_helper);
-    Free(request_to_send);
+		Free(my_helper);
+		Free(request_to_send);
 		return;
 
 	}
-
-	//int target_addr_len = strlen(target_addr);
-
-	//printf("target_addr after 2nd sscanf %s\n", target_addr);
-	//malloc_target_addr = Malloc(sizeof(char) * target_addr_len);
-	//strncpy(malloc_target_addr, target_addr, strlen(target_addr));
-	//strlcat(target_addr,"\0");
 
 	/* building the request line for sending to the real website server */
 	strcat(request_method, " "); // because path all starts with "/" LALALALALAL
 	strcat(request_path, " ");
 	strcat(request_version, "\n");
 	/* put the modified request line in to request_to_send */
-	//printf("request 1 %s\n", request_to_send);
 	strcat(request_to_send, request_method);
-	//printf("request 2 %s\n", request_to_send);
 	strcat(request_to_send, request_path);
-	//printf("request 3 %s\n", request_to_send);
 	strcat(request_to_send, request_version);
-	//printf("request 4 %s\n", request_to_send);
-	/* now i have the first line */
 
-	//printf("target_addr before while %s\n",target_addr);
+	/* now i have the first line */
 
 	while ((rio_read_flag = Rio_readlineb_w(&rio, buffer, MAXLINE)) != 0){
 		/* error in reading headers*/
 		if(rio_read_flag < 0){
 			Close(connfd);
-			//Free(&(my_helper->fd));
-//			Free((my_helper->clientaddr));
 			Free(my_helper);
 			return; // kill thread
 		}
 		if(strcmp(buffer,"\r\n") != 0 ){
-		//if(strcmp(buffer,"\r\n") != 0 || strcmp(buffer, "\r") != 0 || strcmp(buffer, "\n") != 0){
 			// if not end of request
 			if((strstr(buffer, "Connection: ") == NULL) && (strstr(buffer, "Proxy-Connection: ") == NULL)){
 				/* if we don't have "Connection: " nor "Proxy-Connection: " */
-                //				printf("No connection buffer:::: %s", buffer);
-
 				strcat(request_to_send, buffer);
 			} else {
-				printf("[%d]Stripping header: %s\n", my_helper->count,buffer);
+				printf("[%d]Stripping header: %s", my_helper->count,buffer);
 			}
 		} else {
 			// now we are at the end of the request, after this block of code, we will break out
@@ -456,25 +294,17 @@ void doit(struct bundle *my_helper)
 	/* now I have the all request to send*/
 	/* Open clientfd, so I am a client now to the real server */
 
-
-	//strncpy(malloc_target_addr, target_addr, target_addr_len);
-
-	//printf("what is the tar_add: %s \n what is the port num %d\n", target_addr, port_num);
 	if((proxy_client_fd = open_clientfd_ts(target_addr, port_num)) <0){
 		/* Use Rio_writen? To print to terminal? or something? */
 		Close(connfd);
-		//Free(&(my_helper->fd));
-//		Free((my_helper->clientaddr));
 		Free(my_helper);
 		Free(request_to_send);
 		return;
 	}
 	/* if open client successed */
+	printf("Request to send:\n%s", request_to_send);
 	// send the built request to the real server
-	printf("[%d]Request to send is: \n%s",my_helper->count,request_to_send);
-	printf("[%d] <---- request print finish \n",my_helper->count);
 	Rio_writen_w(proxy_client_fd, request_to_send, strlen(request_to_send));
-	printf("[%d] <---- request send \n",my_helper->count);
 	/* Now I have send all my request to the real website */
 
 	/* As a client, receive info. from the real server */
@@ -484,8 +314,6 @@ void doit(struct bundle *my_helper)
 	while ((rio_read_flag = Rio_readlineb_w(&proxy_client_rio, buffer, MAXLINE)) != 0) {
 		if(rio_read_flag < 0){
 			Close(connfd);
-			//Free(&(my_helper->fd));
-//			Free((my_helper->clientaddr));
 			Free(my_helper);
 			Free(request_to_send);
 			return; // kill thread
@@ -499,16 +327,11 @@ void doit(struct bundle *my_helper)
 
 
 		logfile_size += strlen(buffer);
-	    //printf("response header read from server is: %s", buffer);
 	    Rio_writen_w(connfd, buffer, strlen(buffer));
 		if(strcmp(buffer,"\r\n") != 0) {
 			if (strstr(buffer, "Content-Length: ") != NULL) {
 				content_size = atoi(strstr(buffer, " ") + 1);
-	           //printf("Content size is %d\n", content_size);
 			}
-	        if (strstr(buffer, "Transfer-Encoding: ") != NULL) {
-	        	is_chunked = 1;
-	        }
 	    } else {
 	    	break;
 	    }
@@ -519,56 +342,17 @@ void doit(struct bundle *my_helper)
 		n = Rio_readlineb_w(&proxy_client_rio, buffer, MAXLINE);
 		//printf("reading html %s\n", buffer);
 		Rio_writen_w(connfd, buffer, n);
+		logfile_size += n;
 		if (n == 0){
 			break;
 		}
 	}
-//	while (1) {
-// 		//printf("first time reading buffer %s\n", buffer);
-// 		/* Read and Write response content */
-// 		int size_read = 0;
 
-// 		if (is_chunked) {
-// 			if ((size_read = process_chunked(proxy_client_rio, connfd)) < 0) {
-//                 Close(proxy_client_fd);
-//                 Close(connfd);
-//                 //Free(&(my_helper->fd));
-// //                Free((my_helper->clientaddr));
-//                 Free(my_helper);
-//                 Free(request_to_send);
-//                 return; // kill thread
-// 			}
-// 			logfile_size += size_read;
-// 			break;
-// 		}
-// 		/* If the response content is not chunked*/
-// 		else {
-// 			if ((size_read = process_unchunked(proxy_client_rio, connfd, content_size)) < 0) {
-//                 Close(proxy_client_fd);
-//                 Close(connfd);
-//                 //Free(&(my_helper->fd));
-// //                Free((my_helper->clientaddr));
-//                 Free(my_helper);
-//                 Free(request_to_send);
-//                 return; // kill thread
-// 			}
-// 			logfile_size += size_read;
-
-//       break;
-// 		}
-
-// 	}
-	logfile_size = 5;
 	Close(proxy_client_fd);
-//	printf("[%d]log_string herer %s\n", my_helper->count, log_string);
-//	printf("[%d]request_uri herherh%s\n", my_helper->count, request_uri);
-//	printf("[%d]log size %d\n", my_helper->count, logfile_size);
-//	printf("the stuff we need to print is %d\n", my_helper->clientaddr.sin_addr.s_addr);
+
 	format_log_entry(log_string, &(my_helper->clientaddr), request_uri, logfile_size);
 
 	logfile_size = 0; // reset to 0
-	//printf("log string is %s\n", log_string);
-
 
 	pthread_mutex_lock(&lock);
 	write_logfile(log_string); // write this function!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -576,8 +360,6 @@ void doit(struct bundle *my_helper)
 
 
 	Close(connfd);
-	//Free(&(my_helper->fd));
-//	Free((my_helper->clientaddr));
 	Free(my_helper);
 	Free(request_to_send);
 	return;
@@ -613,13 +395,11 @@ main(int argc, char **argv)
 	}
 
 	/* init mutex lock */
-	/******************************* be sequential for a while ******************/
 	if (pthread_mutex_init(&lock, NULL) != 0 || pthread_mutex_init(&thread_lock, NULL) != 0)
    {
        printf("\n mutex init failed\n");
        return 1;
    }
-	/******************************* be sequential for a while ******************/
 
 	port = atoi(argv[1]); // get port num
 	listenfd = Open_listenfd(port);
