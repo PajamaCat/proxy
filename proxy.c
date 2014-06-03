@@ -19,7 +19,6 @@ int	parse_uri(char *uri, char *target_addr, char *path, int *port);
 void	format_log_entry(char *logstring, struct sockaddr_in *sockaddr,
 	    char *uri, int size);
 ssize_t Rio_readn_w(int fd, void *userbuf, size_t n);
-ssize_t Rio_readnb_w(rio_t* rp, void* usrbuf, size_t n);
 ssize_t Rio_readlineb_w(rio_t *rp, void *userbuf, size_t maxlen);
 ssize_t Rio_writen_w(int fd, void *userbuf, size_t n);
 int open_clientfd_ts(char *hostname, int port);
@@ -35,7 +34,6 @@ struct bundle {
 /* Wrapper for rio_readn */
 ssize_t Rio_readn_w(int fd, void *userbuf, size_t n){
 	ssize_t ret;
-	// errno = 0; // is this way of defining errno correct?
 	if((ret = rio_readn(fd, userbuf, n)) < 0){
 		fprintf(stderr, "ERROR: Read failure! %s\n", strerror(errno));
 		return ret;
@@ -43,19 +41,9 @@ ssize_t Rio_readn_w(int fd, void *userbuf, size_t n){
 	return ret;
 }
 
-ssize_t Rio_readnb_w(rio_t* rp, void* usrbuf, size_t n) {
-  ssize_t ret;
-
-  if ((ret = rio_readnb(rp, usrbuf, n)) < 0) {
-    printf("Rio_readnb_w: rio_readnb failed\n");
-    return 0;
-  }
-  return ret;
-}
-
+/* Wrapper for rio_readlineb */
 ssize_t Rio_readlineb_w(rio_t *rp, void *userbuf, size_t maxlen){
 	ssize_t ret;
-	// errno = 0; // is this way of defining errno correct?
 	if((ret = rio_readlineb(rp, userbuf, maxlen)) < 0){
 		fprintf(stderr, "ERROR: Read failure! %s\n", strerror(errno));
 		return ret;
@@ -64,21 +52,20 @@ ssize_t Rio_readlineb_w(rio_t *rp, void *userbuf, size_t maxlen){
 
 }
 
-
+/* Wrapper for rio_writen */
 ssize_t Rio_writen_w(int fd, void *userbuf, size_t n){
 	ssize_t ret;
-	// errno = 0; // is this way of defining errno correct?
 	ret = rio_writen(fd, userbuf, n);
-	//printf("ret size %d, n size %d\n", (int)ret, (int)n);
 	if((size_t)ret != n){
-		
-		//fprintf(stderr, "ERROR: Write failure! %s\n", strerror(errno));
 		return ret;
 	}
 	return ret;
 }
 
-
+/* 
+ * Thread safe version of open_clientfd,
+ * using getaddrinfo
+ */
 int open_clientfd_ts(char *hostname, int port)
 {
 	int clientfd;
@@ -104,7 +91,6 @@ int open_clientfd_ts(char *hostname, int port)
 	for(loop_elem = res; loop_elem != NULL; loop_elem = loop_elem->ai_next){
 
 		if(connect(clientfd, loop_elem->ai_addr, loop_elem->ai_addrlen) < 0){
-			// DO WE NEED TO PERROR?
 			continue;
 		}
 		break; // we have established an connection
@@ -120,14 +106,14 @@ int open_clientfd_ts(char *hostname, int port)
 	return clientfd;
 }
 
+/* Write format_log_entry to "proxy.log" */
 void write_logfile(char *inputlog)
 {
-	//printf("%s\n", "started writing to log file");
 	FILE *file;
 	file = fopen("proxy.log","a+");
 	if(file == NULL){
 		fprintf(stderr, "ERROR: file open error at %s\n", "proxy.log");
-		return; // or exit?
+		return;
 	}
 	fprintf(file, "%s\n", inputlog);
 	fclose(file);
@@ -153,17 +139,16 @@ void clienterror(int fd, char *cause, char *errnum,
     sprintf(body, "%s<hr><em>The Simple Proxy</em>\r\n", body);
 
     /* Print the HTTP response */
-    sprintf(buf, "HTTP/1.0 %s %s\r\n", errnum, shortmsg);
+    sprintf(buf, "HTTP/1.1 %s %s\r\n", errnum, shortmsg);
     Rio_writen(fd, buf, strlen(buf));
     sprintf(buf, "Content-type: text/html\r\n");
     Rio_writen(fd, buf, strlen(buf));
     sprintf(buf, "Content-length: %d\r\n\r\n", (int)strlen(body));
     Rio_writen(fd, buf, strlen(buf));
     Rio_writen(fd, body, strlen(body));
-    printf("%s\n", "done");
 }
 
-
+/* Handle Request from main function */
 void doit(struct bundle *my_helper)
 {
 	Pthread_detach(pthread_self()); // mark myself as detach
@@ -191,6 +176,12 @@ void doit(struct bundle *my_helper)
 	char target_addr[MAXLINE];
 	bzero(target_addr, MAXLINE);
 
+	char stripping_header[MAXLINE];
+	bzero(stripping_header, MAXLINE);
+
+	char request_from_client[MAXLINE];
+	bzero(request_from_client, MAXLINE);
+
 	int port_num;
 	ssize_t rio_read_flag;
 	/* local variables of me being a client */
@@ -199,8 +190,6 @@ void doit(struct bundle *my_helper)
 	int content_size = 0;
 	rio_t proxy_client_rio;
 	int http_version_flag = 0;
-
-//	int is_chunked = 0;
 
 	/* Rio read init per descriptor */
 	rio_t rio;
@@ -213,6 +202,7 @@ void doit(struct bundle *my_helper)
 		return;
 	}
 
+	memcpy(request_from_client, buffer, strlen(buffer));
 	/* separate elements of the request line */
 	if(sscanf(buffer, "%s %s %s", request_method, request_uri, request_version) != 3){
 		// error occured in sscanf
@@ -254,13 +244,14 @@ void doit(struct bundle *my_helper)
 	}
 
 	/* building the request line for sending to the real website server */
-	strcat(request_method, " "); // because path all starts with "/" LALALALALAL
+	strcat(request_method, " "); 
 	strcat(request_path, " ");
 	strcat(request_version, "\n");
 	/* put the modified request line in to request_to_send */
 	strcat(request_to_send, request_method);
 	strcat(request_to_send, request_path);
 	strcat(request_to_send, request_version);
+
 
 	/* now i have the first line */
 
@@ -269,15 +260,19 @@ void doit(struct bundle *my_helper)
 		if(rio_read_flag < 0){
 			Close(connfd);
 			Free(my_helper);
+			Free(request_to_send);
 			return; // kill thread
 		}
+
+		strcat(request_from_client, buffer);
+
 		if(strcmp(buffer,"\r\n") != 0 ){
 			// if not end of request
 			if((strstr(buffer, "Connection: ") == NULL) && (strstr(buffer, "Proxy-Connection: ") == NULL)){
 				/* if we don't have "Connection: " nor "Proxy-Connection: " */
 				strcat(request_to_send, buffer);
-			} else {
-				printf("[%d]Stripping header: %s", my_helper->count,buffer);
+			} else {				
+				memcpy(stripping_header, buffer, strlen(buffer));
 			}
 		} else {
 			// now we are at the end of the request, after this block of code, we will break out
@@ -293,23 +288,24 @@ void doit(struct bundle *my_helper)
 	}
 	/* now I have the all request to send*/
 	/* Open clientfd, so I am a client now to the real server */
+	printf("Request %d: Received request from %s (%s): \n%s \n %s \n", my_helper->count, inet_ntoa(my_helper->clientaddr.sin_addr), 
+		inet_ntoa(my_helper->clientaddr.sin_addr), request_from_client, "***  End of Request ***\n");
 
 	if((proxy_client_fd = open_clientfd_ts(target_addr, port_num)) <0){
-		/* Use Rio_writen? To print to terminal? or something? */
 		Close(connfd);
 		Free(my_helper);
 		Free(request_to_send);
 		return;
 	}
 	/* if open client successed */
-	printf("Request to send:\n%s", request_to_send);
+	printf("Stripping Header %s\r%s \n %s \n", stripping_header, request_to_send, "***  End of Request ***\n");
 	// send the built request to the real server
 	Rio_writen_w(proxy_client_fd, request_to_send, strlen(request_to_send));
 	/* Now I have send all my request to the real website */
 
 	/* As a client, receive info. from the real server */
 	Rio_readinitb(&proxy_client_rio, proxy_client_fd);
-	/* read until /r/n, write to client simutaneously*/
+	/* read until Rio_readline returns 0, write to client simutaneously*/
 
 	while ((rio_read_flag = Rio_readlineb_w(&proxy_client_rio, buffer, MAXLINE)) != 0) {
 		if(rio_read_flag < 0){
@@ -337,11 +333,13 @@ void doit(struct bundle *my_helper)
 	    }
 	}
 	/* Now I have the response above HTML code all written to connfd */
+
+	/* just read the content of HTML code */
 	int n;
 	while(1){
 		n = Rio_readlineb_w(&proxy_client_rio, buffer, MAXLINE);
-		//printf("reading html %s\n", buffer);
 		Rio_writen_w(connfd, buffer, n);
+		printf("Request %d: Fowarded %d bytes from end server to client\n", my_helper->count, n);
 		logfile_size += n;
 		if (n == 0){
 			break;
@@ -355,7 +353,7 @@ void doit(struct bundle *my_helper)
 	logfile_size = 0; // reset to 0
 
 	pthread_mutex_lock(&lock);
-	write_logfile(log_string); // write this function!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+	write_logfile(log_string); // lock'n'write
 	pthread_mutex_unlock(&lock);
 
 
@@ -377,14 +375,12 @@ main(int argc, char **argv)
 {
 	/* ignore SIGPIPE to prevent crashing */
 	Signal(SIGPIPE, SIG_IGN);
-//	struct sockaddr_in *clientaddr;
+
+	/* local variables */
 	int port;
 	int listenfd;
-	//int *connectionfd;
 	socklen_t clientaddrlen;
-	/******************************* be sequential for a while ******************/
 	pthread_t tid;
-	/******************************* be sequential for a while ******************/
 	struct bundle *my_helper;
 	int request_count = 0;
 
@@ -405,32 +401,22 @@ main(int argc, char **argv)
 	listenfd = Open_listenfd(port);
 	/* forever loop */
 	while(1){
-		//connectionfd = Malloc(sizeof(int));
-
-//		clientaddr = Malloc(sizeof(struct sockaddr_in));
 		my_helper = Malloc(sizeof(struct bundle));
-
-
 		clientaddrlen = sizeof(struct sockaddr_in);
 		my_helper->fd = Accept(listenfd, (SA *)(&(my_helper->clientaddr)), &clientaddrlen);
-		/* build the helper struct */
-		//my_helper->fd = *connectionfd;
-		//my_helper->clientaddr = clientaddr;
+		
+		// init request atomic count to be 0
 		my_helper->count = request_count;
-		/******************************* be sequential for a while ******************/
+		/* Create a thread */
 		Pthread_create(&tid, NULL, (void *)doit, (void *)my_helper);
-
 		/* atomically add to the request counter */
 		pthread_mutex_lock(&thread_lock);
 		request_count += 1;
 		pthread_mutex_unlock(&thread_lock);
-		/******************************* be sequential for a while ******************/
-
 	}
-	/******************************* be sequential for a while ******************/
+	/* Destroy the locks */
 	pthread_mutex_destroy(&thread_lock);
 	pthread_mutex_destroy(&lock);
-	/******************************* be sequential for a while ******************/
 	/* Return success. */
 	return (0);
 }
