@@ -2,7 +2,7 @@
  * proxy.c - CS:APP Web proxy
  *
  * TEAM MEMBERS:
- *     Wei Zeng			wz19@rice.edu
+ *     Wei Zeng	        wz19@rice.edu
  *     Jiafang Jiang 	jj26@rice.edu
  *
  */
